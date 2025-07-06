@@ -2,6 +2,7 @@ import { useState } from "react";
 import { FileUpload } from "@/components/FileUpload";
 import { ProcessingStatus } from "@/components/ProcessingStatus";
 import { ResultsDisplay } from "@/components/ResultsDisplay";
+import { ProcessingSummary } from "@/components/ProcessingSummary";
 import { RecentFiles } from "@/components/RecentFiles";
 import { FileSpreadsheet, HelpCircle, History, LayoutDashboard } from "lucide-react";
 
@@ -58,6 +59,7 @@ export default function Home() {
           {/* Info Panel */}
           <div className="space-y-6">
             <ResultsDisplay fileId={currentFileId} />
+            <ProcessingSummary fileId={currentFileId} />
           </div>
         </div>
 

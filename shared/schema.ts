@@ -10,6 +10,7 @@ export const processedFiles = pgTable("processed_files", {
   fileSize: integer("file_size").notNull(),
   totalRecords: integer("total_records").notNull(),
   errorMessage: text("error_message"),
+  processedData: text("processed_data"), // JSON string of processed results
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -18,6 +19,7 @@ export const insertProcessedFileSchema = createInsertSchema(processedFiles).omit
   id: true,
   createdAt: true,
   updatedAt: true,
+  processedData: true,
 });
 
 export const fileUploadSchema = z.object({

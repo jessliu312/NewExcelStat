@@ -50,8 +50,42 @@ interface ProcessedData {
   }>;
 }
 
-function processExcelData(worksheet: XLSX.WorkSheet): ProcessedData {
+function unmergeAndFillCells(worksheet: XLSX.WorkSheet): any[][] {
+  // Get the raw data first
   const data = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" }) as any[][];
+  
+  // Handle merged cells by filling down values
+  const merges = worksheet['!merges'] || [];
+  
+  console.log("Found merged ranges:", merges.length);
+  
+  // Process each merge range
+  for (const merge of merges) {
+    const startRow = merge.s.r;
+    const endRow = merge.e.r;
+    const startCol = merge.s.c;
+    const endCol = merge.e.c;
+    
+    // Get the value from the top-left cell of the merge
+    const sourceValue = data[startRow]?.[startCol] || "";
+    
+    // Fill all cells in the merged range with this value
+    for (let row = startRow; row <= endRow; row++) {
+      if (!data[row]) data[row] = [];
+      for (let col = startCol; col <= endCol; col++) {
+        if (!data[row][col] || data[row][col] === "") {
+          data[row][col] = sourceValue;
+        }
+      }
+    }
+  }
+  
+  return data;
+}
+
+function processExcelData(worksheet: XLSX.WorkSheet): ProcessedData {
+  // First unmerge cells and fill data
+  const data = unmergeAndFillCells(worksheet);
 
   // Find container number in the first few rows
   let containerNumber = "";
@@ -356,11 +390,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.log(`Generated Excel file: ${outputPath}`);
           console.log(`File size: ${outputBuffer.length} bytes`);
 
-          // Update the record
-          await storage.updateProcessedFileStatus(
+          // Store processed data for display
+          await storage.updateProcessedFileWithData(
             processedFile.id,
             "completed",
-            undefined
+            processedData.total,
+            JSON.stringify(processedData)
           );
 
           // Clean up the original uploaded file
@@ -464,6 +499,25 @@ export async function registerRoutes(app: Express): Promise<Server> {
     } catch (error) {
       res.status(500).json({ 
         message: error instanceof Error ? error.message : "Failed to get files" 
+      });
+    }
+  });
+
+  // Get processed data summary
+  app.get("/api/files/:id/summary", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const file = await storage.getProcessedFile(id);
+
+      if (!file || file.status !== "completed" || !file.processedData) {
+        return res.status(404).json({ message: "Processed data not found" });
+      }
+
+      const processedData = JSON.parse(file.processedData);
+      res.json(processedData);
+    } catch (error) {
+      res.status(500).json({ 
+        message: error instanceof Error ? error.message : "Failed to get summary" 
       });
     }
   });
