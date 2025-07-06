@@ -1,0 +1,469 @@
+import type { Express, Request } from "express";
+import { createServer, type Server } from "http";
+import { storage } from "./storage";
+import { insertProcessedFileSchema, fileUploadSchema } from "@shared/schema";
+import { z } from "zod";
+import multer, { FileFilterCallback } from "multer";
+import XLSX from "xlsx";
+import path from "path";
+import fs from "fs";
+
+// Extend Request interface to include file property
+interface RequestWithFile extends Request {
+  file?: any;
+}
+
+// Configure multer for file uploads with proper filename handling
+const upload = multer({ 
+  dest: 'uploads/',
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  fileFilter: (req: any, file: any, cb: FileFilterCallback) => {
+    // Fix filename encoding issues
+    try {
+      file.originalname = Buffer.from(file.originalname, 'latin1').toString('utf8');
+    } catch (e) {
+      // If conversion fails, keep original name
+    }
+
+    if (file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || 
+        file.originalname.endsWith('.xlsx')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only .xlsx files are allowed'));
+    }
+  }
+});
+
+interface ProcessedData {
+  containerNumber: string;
+  total: number;
+  warehouseSummary: Array<{
+    warehouse: string;
+    ctn: number;
+    skid: string;
+  }>;
+  referenceDetails: Array<{
+    type: string;
+    reference1: string;
+    reference2: string;
+    ctn: number;
+  }>;
+}
+
+function processExcelData(worksheet: XLSX.WorkSheet): ProcessedData {
+  const data = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" }) as any[][];
+
+  // Extract container number from first row (assuming it's in the first cell)
+  const containerNumber = data[0]?.[0]?.toString() || "";
+
+  const warehouseSummary: { [key: string]: number } = {};
+  const referenceDetailsMap: { [key: string]: { type: string; reference1: string; reference2: string; ctn: number } } = {};
+  let totalCtn = 0;
+
+  console.log("Total rows in data:", data.length);
+  console.log("First 5 rows:", data.slice(0, 5));
+
+  // Process each row starting from row 2 (index 1) to skip header
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (!row || row.length < 4) continue;
+
+    const rowNumber = i + 1;
+    const ctnValue = parseInt(row[3]?.toString()) || 0; // Column D (CTN)
+
+    // Skip rows with 0 CTN, empty CTN, or rows that are formulas/totals
+    if (ctnValue === 0 || !row[3] || row[3]?.toString().includes("=")) {
+      console.log(`Skipping row ${rowNumber}: CTN=${row[3]}`);
+      continue;
+    }
+
+    const reference1 = row[0]?.toString().trim() || ""; // Column A (分货号)
+    const reference2 = row[2]?.toString().trim() || ""; // Column C (参考号)
+    
+    // Check multiple columns for warehouse info due to merged cells
+    let warehouse = "";
+    let warehouseCol = "";
+    
+    // Check columns K, L, M for warehouse codes
+    for (let col = 10; col <= 12; col++) { // Columns K(10), L(11), M(12)
+      const cellValue = row[col]?.toString().trim() || "";
+      // Look for typical warehouse patterns: 3-4 letters followed by numbers
+      if (cellValue && /^[A-Z]{3,4}\d+$/.test(cellValue)) {
+        warehouse = cellValue;
+        warehouseCol = String.fromCharCode(75 + col - 10); // K, L, M
+        break;
+      }
+    }
+    
+    const note = row[13]?.toString().trim() || ""; // Column N (备注)
+
+    console.log(`Row ${rowNumber}: Reference1="${reference1}", CTN=${ctnValue}, Warehouse="${warehouse}" (Col ${warehouseCol}), Note="${note}"`);
+
+    totalCtn += ctnValue;
+
+    // Determine where this shipment goes
+    if (note.includes("UPS")) {
+      // UPS delivery
+      warehouseSummary["UPS"] = (warehouseSummary["UPS"] || 0) + ctnValue;
+      console.log(`  -> Added ${ctnValue} to UPS`);
+    } else if (warehouse && warehouse.length > 0) {
+      // Has warehouse code - use it
+      warehouseSummary[warehouse] = (warehouseSummary[warehouse] || 0) + ctnValue;
+      console.log(`  -> Added ${ctnValue} to warehouse ${warehouse}`);
+
+      // Add to reference details for warehouse deliveries
+      if (reference1 && reference2) {
+        let deliveryType = "Self"; // Default
+        if (note.includes("卡车派送")) {
+          deliveryType = "PD";
+        } else if (note.includes("自提")) {
+          deliveryType = "Self";
+        }
+
+        const key = `${deliveryType}_${reference1}_${reference2}`;
+        if (referenceDetailsMap[key]) {
+          referenceDetailsMap[key].ctn += ctnValue;
+        } else {
+          referenceDetailsMap[key] = { 
+            type: deliveryType, 
+            reference1, 
+            reference2, 
+            ctn: ctnValue 
+          };
+        }
+      }
+    } else {
+      // No warehouse code - this is likely a manual delivery with full address
+      console.log(`  -> Manual delivery with address in note`);
+
+      // Add to reference details for manual deliveries
+      if (reference1 && reference2) {
+        let deliveryType = "PD"; // Default for manual deliveries
+        if (note.includes("自提")) {
+          deliveryType = "Self";
+        }
+
+        const key = `${deliveryType}_${reference1}_${reference2}`;
+        if (referenceDetailsMap[key]) {
+          referenceDetailsMap[key].ctn += ctnValue;
+        } else {
+          referenceDetailsMap[key] = { 
+            type: deliveryType, 
+            reference1, 
+            reference2, 
+            ctn: ctnValue 
+          };
+        }
+      }
+    }
+  }
+
+  // Convert warehouse summary to array and sort
+  const warehouseSummaryArray = Object.entries(warehouseSummary)
+    .map(([warehouse, ctn]) => ({
+      warehouse,
+      ctn,
+      skid: "" // Skid column is empty
+    }))
+    .sort((a, b) => {
+      // Sort UPS last, others alphabetically
+      if (a.warehouse === "UPS") return 1;
+      if (b.warehouse === "UPS") return -1;
+      return a.warehouse.localeCompare(b.warehouse);
+    });
+
+  // Convert reference details map to array
+  const referenceDetails = Object.values(referenceDetailsMap);
+
+  console.log("Warehouse Summary:", warehouseSummaryArray);
+  console.log("Reference Details:", referenceDetails);
+  console.log("Total CTN:", totalCtn);
+
+  return {
+    containerNumber,
+    total: totalCtn,
+    warehouseSummary: warehouseSummaryArray,
+    referenceDetails
+  };
+}
+
+async function generateOutputExcel(processedData: ProcessedData): Promise<Buffer> {
+  // Create a new workbook using XLSX library
+  const workbook = XLSX.utils.book_new();
+
+  // Build complete output as simple 2D array
+  const output = [];
+
+  // Row 1: Header with container info
+  const row1 = new Array(29).fill('');
+  row1[1] = processedData.containerNumber; // B column
+  row1[15] = 'Total'; // P column  
+  row1[17] = processedData.total; // R column
+  row1[18] = 'Date:'; // S column
+  output.push(row1);
+
+  // Row 2: Warehouse headers
+  const row2 = new Array(29).fill('');
+  row2[0] = 'Ware House';
+  row2[1] = 'CTN';
+  row2[2] = 'Skid';
+  for (let i = 1; i <= 24; i++) {
+    row2[2 + i] = i;
+  }
+  output.push(row2);
+
+  // Warehouse data rows
+  let warehouseSubTotal = 0;
+  processedData.warehouseSummary.forEach((item) => {
+    const row = new Array(29).fill('');
+    row[0] = item.warehouse;
+    row[1] = item.ctn;
+    row[2] = item.skid || '';
+    output.push(row);
+    warehouseSubTotal += item.ctn;
+  });
+
+  // Warehouse subtotal row
+  const subtotalRow = new Array(29).fill('');
+  subtotalRow[0] = 'SUB-TOTAL';
+  subtotalRow[1] = warehouseSubTotal;
+  output.push(subtotalRow);
+
+  // Empty row
+  output.push(new Array(29).fill(''));
+
+  // Reference details if any
+  if (processedData.referenceDetails.length > 0) {
+    // Reference headers
+    const refHeaders = new Array(29).fill('');
+    refHeaders[0] = 'Type';
+    refHeaders[1] = 'Reference1';
+    refHeaders[2] = 'Reference2';
+    refHeaders[3] = 'CTN';
+    output.push(refHeaders);
+
+    // Reference data rows
+    let referenceSubTotal = 0;
+    processedData.referenceDetails.forEach((ref) => {
+      const refRow = new Array(29).fill('');
+      refRow[0] = ref.type;
+      refRow[1] = ref.reference1;
+      refRow[2] = ref.reference2;
+      refRow[3] = ref.ctn;
+      output.push(refRow);
+      referenceSubTotal += ref.ctn;
+    });
+
+    // Reference subtotal row
+    const refSubtotal = new Array(29).fill('');
+    refSubtotal[0] = 'SUB-TOTAL';
+    refSubtotal[3] = referenceSubTotal;
+    output.push(refSubtotal);
+  }
+
+  // Create worksheet from 2D array
+  const worksheet = XLSX.utils.aoa_to_sheet(output);
+
+  // Add worksheet to workbook
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Summary');
+
+  // Generate buffer
+  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+}
+
+export async function registerRoutes(app: Express): Promise<Server> {
+
+  // Upload and process Excel file
+  app.post("/api/upload", upload.single('file'), async (req: RequestWithFile, res) => {
+    try {
+      if (!req.file) {
+        return res.status(400).json({ message: "No file uploaded" });
+      }
+
+      const { filename, size } = fileUploadSchema.parse({
+        filename: req.file.originalname,
+        size: req.file.size,
+      });
+
+      // Create processing record
+      const processedFile = await storage.createProcessedFile({
+        originalFilename: filename,
+        processedFilename: `processed_${filename}`,
+        status: "processing",
+        fileSize: size,
+        totalRecords: 0,
+        errorMessage: null,
+      });
+
+      // Process the file asynchronously
+      setImmediate(async () => {
+        try {
+          // Read the uploaded file
+          const fileBuffer = fs.readFileSync(req.file!.path);
+          const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
+          const sheetName = workbook.SheetNames[0];
+          const worksheet = workbook.Sheets[sheetName];
+
+          console.log(`Processing sheet: ${sheetName}`);
+          console.log('Raw data sample:', JSON.stringify(XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" }).slice(0, 5), null, 2));
+
+          // Process the data
+          const processedData = processExcelData(worksheet);
+
+          console.log('Processed data:', JSON.stringify(processedData, null, 2));
+
+          // Generate output Excel
+          const outputBuffer = await generateOutputExcel(processedData);
+
+          // Save the processed file with safe filename
+          const timestamp = Date.now();
+          const safeFilename = filename.replace(/[^\w\s.-]/g, '_');
+          const outputPath = path.join('uploads', `processed_${timestamp}_${safeFilename}`);
+          fs.writeFileSync(outputPath, outputBuffer);
+
+          console.log(`Generated Excel file: ${outputPath}`);
+          console.log(`File size: ${outputBuffer.length} bytes`);
+
+          // Update the record
+          await storage.updateProcessedFileStatus(
+            processedFile.id,
+            "completed",
+            undefined
+          );
+
+          // Clean up the original uploaded file
+          fs.unlinkSync(req.file!.path);
+
+        } catch (error) {
+          console.error('Processing error:', error);
+          await storage.updateProcessedFileStatus(
+            processedFile.id,
+            "failed",
+            error instanceof Error ? error.message : "Unknown error"
+          );
+        }
+      });
+
+      res.json({ 
+        message: "File uploaded successfully", 
+        fileId: processedFile.id,
+        status: "processing"
+      });
+
+    } catch (error) {
+      console.error('Upload error:', error);
+      res.status(500).json({ 
+        message: error instanceof Error ? error.message : "Upload failed" 
+      });
+    }
+  });
+
+  // Get processing status
+  app.get("/api/files/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const file = await storage.getProcessedFile(id);
+
+      if (!file) {
+        return res.status(404).json({ message: "File not found" });
+      }
+
+      res.json(file);
+    } catch (error) {
+      res.status(500).json({ 
+        message: error instanceof Error ? error.message : "Failed to get file status" 
+      });
+    }
+  });
+
+  // Download processed file
+  app.get("/api/files/:id/download", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const file = await storage.getProcessedFile(id);
+
+      if (!file || file.status !== "completed") {
+        return res.status(404).json({ message: "File not found or not ready" });
+      }
+
+      console.log(`Download request for file ID: ${id}`);
+      console.log(`File details:`, file);
+
+      // Find the processed file in uploads directory
+      const uploadsDir = 'uploads';
+      const files = fs.readdirSync(uploadsDir);
+      console.log(`Available files:`, files);
+
+      const processedFile = files
+        .filter(f => f.includes('processed_'))
+        .sort((a, b) => {
+          const timestampA = parseInt(a.split('_')[1]) || 0;
+          const timestampB = parseInt(b.split('_')[1]) || 0;
+          return timestampB - timestampA; // Latest first
+        })[0];
+      console.log(`Found processed file:`, processedFile);
+
+      if (!processedFile) {
+        return res.status(404).json({ message: "Processed file not found" });
+      }
+
+      const filePath = path.join(uploadsDir, processedFile);
+      console.log(`File path:`, filePath);
+
+      // Check if file exists
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ message: "File does not exist" });
+      }
+
+      // Read file and send as buffer
+      const fileBuffer = fs.readFileSync(filePath);
+      console.log(`File buffer size:`, fileBuffer.length);
+
+      // Set headers one by one to avoid encoding issues
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Length', fileBuffer.length.toString());
+      res.setHeader('Content-Disposition', 'attachment; filename="summary.xlsx"');
+
+      res.send(fileBuffer);
+
+    } catch (error) {
+      console.error("Download error:", error);
+      res.status(500).json({ 
+        message: error instanceof Error ? error.message : "Download failed" 
+      });
+    }
+  });
+
+  // Get recent files
+  app.get("/api/files", async (req, res) => {
+    try {
+      const files = await storage.getRecentProcessedFiles(10);
+      res.json(files);
+    } catch (error) {
+      res.status(500).json({ 
+        message: error instanceof Error ? error.message : "Failed to get files" 
+      });
+    }
+  });
+
+  // Delete file
+  app.delete("/api/files/:id", async (req, res) => {
+    try {
+      const id = parseInt(req.params.id);
+      const deleted = await storage.deleteProcessedFile(id);
+
+      if (!deleted) {
+        return res.status(404).json({ message: "File not found" });
+      }
+
+      res.json({ message: "File deleted successfully" });
+    } catch (error) {
+      res.status(500).json({ 
+        message: error instanceof Error ? error.message : "Delete failed" 
+      });
+    }
+  });
+
+  const httpServer = createServer(app);
+  return httpServer;
+}
