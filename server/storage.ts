@@ -21,8 +21,13 @@ export class MemStorage implements IStorage {
     const id = this.currentId++;
     const now = new Date();
     const file: ProcessedFile = { 
-      ...insertFile, 
       id,
+      status: insertFile.status,
+      originalFilename: insertFile.originalFilename,
+      processedFilename: insertFile.processedFilename,
+      fileSize: insertFile.fileSize,
+      totalRecords: insertFile.totalRecords,
+      errorMessage: insertFile.errorMessage || null,
       createdAt: now,
       updatedAt: now
     };

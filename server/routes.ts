@@ -56,12 +56,16 @@ function processExcelData(worksheet: XLSX.WorkSheet): ProcessedData {
   // Find container number in the first few rows
   let containerNumber = "";
   for (let i = 0; i < Math.min(5, data.length); i++) {
-    for (let j = 0; j < Math.min(10, data[i]?.length || 0); j++) {
+    for (let j = 0; j < Math.min(15, data[i]?.length || 0); j++) {
       const cellValue = data[i]?.[j]?.toString() || "";
-      // Look for container number pattern (like OOCU8186130)
-      if (cellValue.match(/^[A-Z]{4}\d{7,}$/)) {
-        containerNumber = cellValue;
-        break;
+      // Look for container number pattern (like OOCU8186130 or patterns with Chinese text)
+      if (cellValue.match(/[A-Z]{4}\d{7,}/)) {
+        // Extract just the container number part
+        const match = cellValue.match(/([A-Z]{4}\d{7,})/);
+        if (match) {
+          containerNumber = match[1];
+          break;
+        }
       }
     }
     if (containerNumber) break;
@@ -128,34 +132,62 @@ function processExcelData(worksheet: XLSX.WorkSheet): ProcessedData {
 
     // Determine delivery type and destination
     if (note.includes("UPS")) {
-      // UPS delivery
+      // UPS delivery - regardless of warehouse column
       warehouseSummary["UPS"] = (warehouseSummary["UPS"] || 0) + ctnValue;
-      console.log(`  -> Added ${ctnValue} to UPS`);
-    } else if (warehouse && warehouse.length > 0 && warehouse.length <= 4) {
-      // Warehouse code (4 characters or less)
-      warehouseSummary[warehouse] = (warehouseSummary[warehouse] || 0) + ctnValue;
-      console.log(`  -> Added ${ctnValue} to warehouse ${warehouse}`);
-    } else {
-      // Manual delivery with full address or self pickup
-      let deliveryType = "PD"; // Default for addresses
-      
-      if (note.includes("自提")) {
-        deliveryType = "Self";
-      }
-
+      console.log(`  -> Added ${ctnValue} to UPS (regardless of warehouse)`);
+    } else if (note.includes("自提")) {
+      // Self pickup - add to reference details
       if (reference1 && reference2) {
-        const key = `${deliveryType}_${reference1}_${reference2}`;
+        const key = `Self_${reference1}_${reference2}`;
         if (referenceDetailsMap[key]) {
           referenceDetailsMap[key].ctn += ctnValue;
         } else {
           referenceDetailsMap[key] = { 
-            type: deliveryType, 
+            type: "Self", 
             reference1, 
             reference2, 
             ctn: ctnValue 
           };
         }
-        console.log(`  -> Added ${ctnValue} to ${deliveryType} delivery (${reference1}, ${reference2})`);
+        console.log(`  -> Added ${ctnValue} to Self pickup (${reference1}, ${reference2})`);
+      }
+    } else if (note.includes("卡车派送") && warehouse && warehouse.length > 4) {
+      // PD delivery - only if note contains "卡车派送" AND warehouse has more than 4 characters
+      if (reference1 && reference2) {
+        const key = `PD_${reference1}_${reference2}`;
+        if (referenceDetailsMap[key]) {
+          referenceDetailsMap[key].ctn += ctnValue;
+        } else {
+          referenceDetailsMap[key] = { 
+            type: "PD", 
+            reference1, 
+            reference2, 
+            ctn: ctnValue 
+          };
+        }
+        console.log(`  -> Added ${ctnValue} to PD delivery (${reference1}, ${reference2}) - warehouse: ${warehouse}`);
+      }
+    } else if (warehouse && warehouse.length > 0 && warehouse.length <= 4) {
+      // Regular warehouse code (4 characters or less) - for 卡车派送 with short warehouse codes
+      warehouseSummary[warehouse] = (warehouseSummary[warehouse] || 0) + ctnValue;
+      console.log(`  -> Added ${ctnValue} to warehouse ${warehouse}`);
+    } else {
+      // Fallback - if it doesn't match other criteria, might be a PD with address
+      if (note.includes("卡车派送") && reference1 && reference2) {
+        const key = `PD_${reference1}_${reference2}`;
+        if (referenceDetailsMap[key]) {
+          referenceDetailsMap[key].ctn += ctnValue;
+        } else {
+          referenceDetailsMap[key] = { 
+            type: "PD", 
+            reference1, 
+            reference2, 
+            ctn: ctnValue 
+          };
+        }
+        console.log(`  -> Added ${ctnValue} to PD delivery fallback (${reference1}, ${reference2})`);
+      } else {
+        console.log(`  -> Unmatched row: Note="${note}", Warehouse="${warehouse}"`);
       }
     }
   }
