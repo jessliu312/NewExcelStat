@@ -54,8 +54,9 @@ function unmergeAndFillCells(worksheet: XLSX.WorkSheet): any[][] {
   // Get the raw data first
   const data = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" }) as any[][];
   
-  // Handle merged cells by filling down values
+  // Handle merged cells by filling down values, but keep track of processed rows to avoid double counting
   const merges = worksheet['!merges'] || [];
+  const processedMerges = new Set<string>();
   
   console.log("Found merged ranges:", merges.length);
   
@@ -69,12 +70,24 @@ function unmergeAndFillCells(worksheet: XLSX.WorkSheet): any[][] {
     // Get the value from the top-left cell of the merge
     const sourceValue = data[startRow]?.[startCol] || "";
     
-    // Fill all cells in the merged range with this value
-    for (let row = startRow; row <= endRow; row++) {
-      if (!data[row]) data[row] = [];
-      for (let col = startCol; col <= endCol; col++) {
-        if (!data[row][col] || data[row][col] === "") {
-          data[row][col] = sourceValue;
+    // For CTN column (Column D = index 3), only keep the value in the first row to avoid double counting
+    if (startCol === 3) { // Column D (CTN)
+      // Clear CTN values in merged rows except the first one
+      for (let row = startRow + 1; row <= endRow; row++) {
+        if (data[row]) {
+          data[row][startCol] = ""; // Clear to avoid double counting
+        }
+      }
+      // Mark this range as processed
+      processedMerges.add(`${startRow}-${endRow}-${startCol}`);
+    } else {
+      // For other columns, fill all cells in the merged range with the source value
+      for (let row = startRow; row <= endRow; row++) {
+        if (!data[row]) data[row] = [];
+        for (let col = startCol; col <= endCol; col++) {
+          if (!data[row][col] || data[row][col] === "") {
+            data[row][col] = sourceValue;
+          }
         }
       }
     }
@@ -160,7 +173,10 @@ function processExcelData(worksheet: XLSX.WorkSheet): ProcessedData {
       continue;
     }
 
-    console.log(`Row ${rowNumber}: Ref1="${reference1}", Ref2="${reference2}", CTN=${ctnValue}, Warehouse="${warehouse}", Note="${note}"`);
+    // Debug: Show what we're processing
+    if (ctnValue > 0) {
+      console.log(`Row ${rowNumber}: Ref1="${reference1}", Ref2="${reference2}", CTN=${ctnValue}, Warehouse="${warehouse}", Note="${note}"`);
+    }
 
     totalCtn += ctnValue;
 
