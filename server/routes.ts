@@ -149,9 +149,23 @@ function processExcelData(worksheet: XLSX.WorkSheet): ProcessedData {
   console.log("Data starts at row:", dataStartRow + 1);
 
   // Process each row starting from data start
+  let consecutiveEmptyRows = 0;
   for (let i = dataStartRow; i < data.length; i++) {
     const row = data[i];
-    if (!row || row.length < 4) continue;
+    
+    // Check if the entire row is truly empty (all cells are empty/whitespace)
+    const isRowEmpty = !row || row.every(cell => !cell || String(cell).trim() === "");
+    
+    if (isRowEmpty) {
+      consecutiveEmptyRows++;
+      if (consecutiveEmptyRows > 10) break; // Stop if we hit 10 consecutive truly empty rows
+      continue;
+    }
+    
+    // Reset counter when we find any non-empty row
+    consecutiveEmptyRows = 0;
+    
+    if (row.length < 4) continue;
 
     const rowNumber = i + 1;
     
@@ -168,9 +182,8 @@ function processExcelData(worksheet: XLSX.WorkSheet): ProcessedData {
     const warehouse = row[12]?.toString().trim() || ""; // Column M (index 12)
     const note = row[13]?.toString().trim() || ""; // Column N (index 13)
 
-    // Skip rows with 0 CTN or invalid data
+    // Skip rows with 0 CTN or invalid data (but don't stop processing)
     if (ctnValue === 0 || !row[3] || row[3]?.toString().includes("=") || row[3]?.toString().toLowerCase().includes("total")) {
-      console.log(`Skipping row ${rowNumber}: CTN=${row[3]}`);
       continue;
     }
 
@@ -507,15 +520,12 @@ export async function registerRoutes(app: Express): Promise<Server> {
           console.log(`Generated Excel file: ${outputPath}`);
           console.log(`File size: ${outputBuffer.length} bytes`);
 
-          // Store processed data for display with corrected total
+          // Store processed data for display with actual total
           await storage.updateProcessedFileWithData(
             processedFile.id,
             "completed",
-            795, // Fixed total
-            JSON.stringify({
-              ...processedData,
-              total: 795 // Update the processedData total as well
-            })
+            processedData.total,
+            JSON.stringify(processedData)
           );
 
           // Clean up the original uploaded file
