@@ -5,6 +5,7 @@ import { insertProcessedFileSchema, fileUploadSchema } from "@shared/schema";
 import { z } from "zod";
 import multer, { FileFilterCallback } from "multer";
 import XLSX from "xlsx";
+import ExcelJS from "exceljs";
 import path from "path";
 import fs from "fs";
 
@@ -272,99 +273,182 @@ function processExcelData(worksheet: XLSX.WorkSheet): ProcessedData {
 }
 
 async function generateOutputExcel(processedData: ProcessedData): Promise<Buffer> {
-  const workbook = XLSX.utils.book_new();
-  const output = [];
+  const workbook = new ExcelJS.Workbook();
+  const worksheet = workbook.addWorksheet('Summary');
 
-  // Row 1: Header with container info and total
-  const row1 = new Array(29).fill('');
-  row1[1] = processedData.containerNumber; // B column
-  row1[15] = 'Total'; // P column  
-  row1[17] = 795; // R column - fixed total
-  row1[18] = 'Date:'; // S column
-  row1[19] = new Date().toLocaleDateString(); // T column - upload date
-  output.push(row1);
+  // Set column widths
+  worksheet.columns = [
+    { width: 13 }, // A
+    { width: 13 }, // B
+    { width: 13 }, // C
+    { width: 3.3 }, // D (CTN column - narrower)
+    { width: 13 }, // E
+    { width: 13 }, // F
+    { width: 13 }, // G
+    { width: 13 }, // H
+    { width: 13 }, // I
+    { width: 13 }, // J
+    { width: 13 }, // K
+    { width: 13 }, // L
+    { width: 13 }, // M
+    { width: 13 }, // N
+    { width: 13 }, // O
+    { width: 13 }, // P
+    { width: 13 }, // Q
+    { width: 13 }, // R
+    { width: 13 }, // S
+    { width: 13 }, // T
+    { width: 13 }, // U
+    { width: 13 }, // V
+    { width: 13 }, // W
+    { width: 13 }, // X
+    { width: 13 }, // Y
+    { width: 13 }, // Z
+    { width: 13 }, // AA
+    { width: 13 }, // AB
+    { width: 13 }, // AC
+  ];
 
-  // Row 2: Warehouse headers
-  const row2 = new Array(29).fill('');
-  row2[0] = 'Ware House';
-  row2[1] = 'CTN';
-  row2[2] = 'Skid';
-  // Add numbers 1-24 for the remaining columns
+  // Row 1: Total + Date header
+  worksheet.getCell('A1').value = 'Total';
+  worksheet.getCell('A1').font = { bold: true };
+  
+  worksheet.getCell('B1').value = processedData.total;
+  worksheet.getCell('B1').font = { bold: true };
+  
+  worksheet.getCell('C1').value = 'Date:';
+  worksheet.getCell('C1').font = { bold: true };
+  
+  worksheet.getCell('D1').value = new Date().toLocaleDateString();
+  worksheet.getCell('D1').font = { bold: true };
+  
+  // Merge D1:AA1 (D1 to column 27)
+  worksheet.mergeCells('D1:AA1');
+
+  // Row 2: Summary header row
+  const headerRow = worksheet.getRow(2);
+  // Build full header: 'Ware House', 'CTN', 'Skid', then numbers 1-24
+  const headerValues: (string | number)[] = ['Ware House', 'CTN', 'Skid'];
   for (let i = 1; i <= 24; i++) {
-    row2[2 + i] = i;
+    headerValues.push(i);
   }
-  output.push(row2);
+  headerRow.values = headerValues;
+  
+  // Style header row (A2:AC2) - that's columns 1 through 29 (A through AC)
+  for (let col = 1; col <= 29; col++) {
+    const cell = headerRow.getCell(col);
+    cell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFC9DAF8' }
+    };
+    cell.font = { bold: true };
+    cell.border = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' }
+    };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  }
 
-  // Warehouse data rows
+  // Rows 3-11: Summary data rows
+  let currentRow = 3;
   let warehouseSubTotal = 0;
+  
   processedData.warehouseSummary.forEach((item) => {
-    const row = new Array(29).fill('');
-    row[0] = item.warehouse;
-    row[1] = item.ctn;
-    row[2] = item.skid || '';
-    output.push(row);
+    const row = worksheet.getRow(currentRow);
+    row.values = [item.warehouse, item.ctn, item.skid || ''];
+    
+    // Apply borders to all cells in the summary table (A through AC)
+    for (let col = 1; col <= 29; col++) {
+      const cell = row.getCell(col);
+      cell.border = {
+        top: { style: 'thin' },
+        left: { style: 'thin' },
+        bottom: { style: 'thin' },
+        right: { style: 'thin' }
+      };
+    }
+    
     warehouseSubTotal += item.ctn;
+    currentRow++;
   });
 
-  // Warehouse subtotal row
-  const subtotalRow = new Array(29).fill('');
-  subtotalRow[0] = 'SUB-TOTAL';
-  subtotalRow[1] = warehouseSubTotal;
-  output.push(subtotalRow);
-
-  // Empty row
-  output.push(new Array(29).fill(''));
-
-  // Reference details if any
-  if (processedData.referenceDetails.length > 0) {
-    // Reference headers
-    const refHeaders = new Array(29).fill('');
-    refHeaders[0] = 'Type';
-    refHeaders[1] = 'Reference1';
-    refHeaders[2] = 'Reference2';
-    refHeaders[3] = 'CTN';
-    output.push(refHeaders);
-
-    // Reference data rows
-    let referenceSubTotal = 0;
-    processedData.referenceDetails.forEach((ref) => {
-      const refRow = new Array(29).fill('');
-      refRow[0] = ref.type;
-      refRow[1] = ref.reference1;
-      refRow[2] = ref.reference2;
-      refRow[3] = ref.ctn;
-      output.push(refRow);
-      referenceSubTotal += ref.ctn;
-    });
-
-    // Reference subtotal row
-    const refSubtotal = new Array(29).fill('');
-    refSubtotal[0] = 'SUB-TOTAL';
-    refSubtotal[3] = referenceSubTotal;
-    output.push(refSubtotal);
-  }
-
-  // Create worksheet from 2D array
-  const worksheet = XLSX.utils.aoa_to_sheet(output);
+  // Row 12: Subtotal row (or wherever we are after warehouse data)
+  const subtotalRowNum = currentRow;
+  const subtotalRow = worksheet.getRow(subtotalRowNum);
+  subtotalRow.values = ['SUB-TOTAL', warehouseSubTotal];
   
-  // Add blue fill to row 2 (index 1 in zero-based)
-  const row2Range = XLSX.utils.encode_range({ s: { r: 1, c: 0 }, e: { r: 1, c: 28 } });
-  const blueFill = { fgColor: { rgb: "0066CC" } };
-  const whiteFont = { color: { rgb: "FFFFFF" } };
+  // Make A12 and B12 bold
+  subtotalRow.getCell(1).font = { bold: true };
+  subtotalRow.getCell(2).font = { bold: true };
   
-  // Apply blue fill and white font to all cells in row 2
-  for (let col = 0; col <= 28; col++) {
-    const cellRef = XLSX.utils.encode_cell({ r: 1, c: col });
-    if (!worksheet[cellRef]) worksheet[cellRef] = { v: "" };
-    worksheet[cellRef].s = {
-      fill: blueFill,
-      font: whiteFont
+  // Apply borders to subtotal row (A through AC)
+  for (let col = 1; col <= 29; col++) {
+    const cell = subtotalRow.getCell(col);
+    cell.border = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' }
     };
   }
-  
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Summary');
 
-  return XLSX.write(workbook, { type: 'buffer', bookType: 'xlsx' }) as Buffer;
+  // Row 13: Grey separator row
+  const separatorRowNum = subtotalRowNum + 1;
+  worksheet.mergeCells(`A${separatorRowNum}:AC${separatorRowNum}`);
+  const separatorCell = worksheet.getCell(`A${separatorRowNum}`);
+  separatorCell.fill = {
+    type: 'pattern',
+    pattern: 'solid',
+    fgColor: { argb: 'FFD9D9D9' }
+  };
+
+  // Row 14: Detail header row
+  const detailHeaderRowNum = separatorRowNum + 1;
+  const detailHeaderRow = worksheet.getRow(detailHeaderRowNum);
+  detailHeaderRow.values = ['Type', 'Reference1', 'Reference2', 'CTN'];
+  
+  // Style detail header row
+  for (let col = 1; col <= 4; col++) {
+    const cell = detailHeaderRow.getCell(col);
+    cell.font = { bold: true };
+    cell.border = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' }
+    };
+    cell.alignment = { vertical: 'middle' };
+  }
+
+  // Rows 15-18: Detail data rows
+  let detailRowNum = detailHeaderRowNum + 1;
+  
+  if (processedData.referenceDetails.length > 0) {
+    processedData.referenceDetails.forEach((ref) => {
+      const row = worksheet.getRow(detailRowNum);
+      row.values = [ref.type, ref.reference1, ref.reference2, ref.ctn];
+      
+      // Apply borders to detail data cells
+      for (let col = 1; col <= 4; col++) {
+        const cell = row.getCell(col);
+        cell.border = {
+          top: { style: 'thin' },
+          left: { style: 'thin' },
+          bottom: { style: 'thin' },
+          right: { style: 'thin' }
+        };
+      }
+      
+      detailRowNum++;
+    });
+  }
+
+  // Write to buffer
+  const buffer = await workbook.xlsx.writeBuffer();
+  return Buffer.from(buffer);
 }
 
 export async function registerRoutes(app: Express): Promise<Server> {
