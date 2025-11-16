@@ -1,0 +1,144 @@
+I have a TypeScript/Node backend (Express) that generates an Excel file using the xlsx library. The sheet name is "Summary", and right now the output looks like a raw table (similar to warehouse_summary.xlsx) with no styling.
+
+I need you to update the Excel-generation code so the layout and formatting of the Summary worksheet matches this specification (which corresponds to my improved.xlsx file):
+
+General
+
+Use a single worksheet named "Summary".
+
+Keep exactly the same data values and formulas I already generate; you are only changing formatting, merges, and column widths.
+
+Row 1: Total + Date header
+
+Cell A1: text "Total" (bold).
+
+Cell B1: numeric total (use the same total I already compute; just format it as a normal number, bold).
+
+Cell C1: text "Date:" (bold).
+
+Cell D1: the current date as a string (e.g. 11/16/2025), bold.
+
+Merge cells D1:AA1 into a single cell so the date spans across the sheet.
+
+Leave E1:AC1 empty.
+
+Font: default size is fine; just make A1, B1, C1, and D1 bold.
+
+Row 2: Summary header row
+This row is the header for the first summary table.
+
+Values:
+
+A2 = "Ware House"
+
+B2 = "CTN"
+
+C2 = "Skid"
+
+D2..J2 = numbers 1, 2, 3, 4, 5, 6, 7 respectively
+
+Styling for all used cells in row 2 (A2:J2):
+
+Background fill color: light blue with hex #C9DAF8 (ARGB FFC9DAF8).
+
+Font: bold.
+
+Borders: thin border on all sides of each cell.
+
+Alignment: horizontally center the text/numbers and vertically center the content.
+
+Rows 3–11: Summary data rows
+These rows contain the warehouse + CTN data, e.g. YHM1, YOW1, etc.
+
+Keep the same values I already generate in each row.
+
+For every cell that is part of the summary table (from A3 through AC11):
+
+Background: white (no fill is fine).
+
+Borders: thin border on all sides of each cell (grid style).
+
+Text: normal (not bold).
+
+Row 12: Subtotal row
+
+A12 = "SUB-TOTAL" (bold).
+
+B12 = subtotal value (already computed in my current code; just preserve the value or formula). Make this cell bold.
+
+Other cells in the row remain blank.
+
+For the cells in row 12 that are part of the table (at least A12:B12, but preferably A12:AC12 to keep the grid consistent):
+
+Same thin borders on all sides.
+
+Background: white.
+
+Bold font for A12 and B12, normal for blank cells.
+
+Row 13: Grey separator row
+This row is just a visual separator between the summary and the detail table.
+
+Merge cells A13:AC13 into a single merged cell.
+
+Leave the value empty.
+
+Background fill color: light grey with hex #D9D9D9 (ARGB FFD9D9D9).
+
+No borders needed here (optional, but if easier you can keep borders off for row 13).
+
+Row 14: Detail header row
+This is the header row for the detail table at the bottom (PD/Self lines, etc.).
+
+Values:
+
+A14 = "Type"
+
+B14 = "Reference1"
+
+C14 = "Reference2"
+
+D14 = "CTN"
+
+Other cells in this row can stay empty.
+
+Styling for A14:D14:
+
+Font: bold.
+
+Background: white (no special fill).
+
+Borders: thin border on all sides of each cell (continue the grid).
+
+Alignment: center vertically; horizontally left-align text headers, right-align numeric headers if you prefer.
+
+Rows 15–18: Detail data rows
+These rows contain the detail lines (e.g. PD, Self with references and CTN values).
+
+Keep the current values exactly.
+
+For cells from A15 through the last used column (at least D15:D18):
+
+Background: white.
+
+Borders: thin border on all sides (grid, matching row 14).
+
+Font: normal (not bold).
+
+Column widths
+
+Set the column widths to match the improved layout approximately:
+
+Columns A, B, C, and E through AC: width ~13.
+
+Column D (the CTN column in both tables): narrower, width ~3.3.
+
+Implementation notes
+
+If the xlsx library you're using cannot apply cell styles/borders/fills when writing files, please switch the Excel generation to use exceljs (which fully supports styles, merges, and column widths) while still being called from my existing Express + TypeScript backend.
+
+Keep everything in TypeScript and integrate this into my existing Express route that generates and streams the Excel file to the client.
+
+Do not change my React/Vite frontend or how the file is downloaded — only adjust the backend Excel generation code so the final Summary sheet looks exactly as described above.
+
+Please show me the updated TypeScript function that builds this workbook and writes it to the response, with all of the formatting steps clearly included (merges, fills, borders, bold fonts, column widths).
