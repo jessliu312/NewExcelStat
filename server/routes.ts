@@ -521,60 +521,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
         errorMessage: null,
       });
 
-      // Process the file asynchronously
-      setImmediate(async () => {
-        try {
-          // Read the uploaded file
-          const fileBuffer = fs.readFileSync(req.file!.path);
-          const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
-          const sheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[sheetName];
+      // Process the file synchronously for instant download
+      try {
+        // Read the uploaded file
+        const fileBuffer = fs.readFileSync(req.file.path);
+        const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
 
-          console.log(`Processing sheet: ${sheetName}`);
+        console.log(`Processing sheet: ${sheetName}`);
 
-          // Process the data
-          const processedData = processExcelData(worksheet);
+        // Process the data
+        const processedData = processExcelData(worksheet);
 
-          console.log('Processed data:', JSON.stringify(processedData, null, 2));
+        console.log('Processed data:', JSON.stringify(processedData, null, 2));
 
-          // Generate output Excel
-          const outputBuffer = await generateOutputExcel(processedData);
+        // Generate output Excel
+        const outputBuffer = await generateOutputExcel(processedData);
 
-          // Save the processed file with safe filename
-          const timestamp = Date.now();
-          const safeFilename = filename.replace(/[^\w\s.-]/g, '_');
-          const outputPath = path.join('uploads', `processed_${timestamp}_${safeFilename}`);
-          fs.writeFileSync(outputPath, outputBuffer);
+        // Save the processed file with safe filename
+        const timestamp = Date.now();
+        const safeFilename = filename.replace(/[^\w\s.-]/g, '_');
+        const outputPath = path.join('uploads', `processed_${timestamp}_${safeFilename}`);
+        fs.writeFileSync(outputPath, outputBuffer);
 
-          console.log(`Generated Excel file: ${outputPath}`);
-          console.log(`File size: ${outputBuffer.length} bytes`);
+        console.log(`Generated Excel file: ${outputPath}`);
+        console.log(`File size: ${outputBuffer.length} bytes`);
 
-          // Store processed data for display with actual total
-          await storage.updateProcessedFileWithData(
-            processedFile.id,
-            "completed",
-            processedData.total,
-            JSON.stringify(processedData)
-          );
+        // Store processed data for display with actual total
+        await storage.updateProcessedFileWithData(
+          processedFile.id,
+          "completed",
+          processedData.total,
+          JSON.stringify(processedData)
+        );
 
-          // Clean up the original uploaded file
-          fs.unlinkSync(req.file!.path);
+        // Clean up the original uploaded file
+        fs.unlinkSync(req.file.path);
 
-        } catch (error) {
-          console.error('Processing error:', error);
-          await storage.updateProcessedFileStatus(
-            processedFile.id,
-            "failed",
-            error instanceof Error ? error.message : "Unknown error"
-          );
-        }
-      });
+        // Return completed status immediately for instant download
+        res.json({ 
+          message: "File processed successfully", 
+          fileId: processedFile.id,
+          status: "completed"
+        });
 
-      res.json({ 
-        message: "File uploaded successfully", 
-        fileId: processedFile.id,
-        status: "processing"
-      });
+      } catch (error) {
+        console.error('Processing error:', error);
+        await storage.updateProcessedFileStatus(
+          processedFile.id,
+          "failed",
+          error instanceof Error ? error.message : "Unknown error"
+        );
+        
+        res.status(500).json({ 
+          message: error instanceof Error ? error.message : "Processing failed" 
+        });
+      }
 
     } catch (error) {
       console.error('Upload error:', error);
