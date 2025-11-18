@@ -511,10 +511,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
         size: req.file.size,
       });
 
-      // Create processing record
+      // Generate the actual processed filename with timestamp
+      const timestamp = Date.now();
+      const safeFilename = filename.replace(/[^\w\s.-]/g, '_');
+      const processedFilename = `processed_${timestamp}_${safeFilename}`;
+
+      // Create processing record with actual filename
       const processedFile = await storage.createProcessedFile({
         originalFilename: filename,
-        processedFilename: `processed_${filename}`,
+        processedFilename: processedFilename,
         status: "processing",
         fileSize: size,
         totalRecords: 0,
@@ -539,10 +544,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         // Generate output Excel
         const outputBuffer = await generateOutputExcel(processedData);
 
-        // Save the processed file with safe filename
-        const timestamp = Date.now();
-        const safeFilename = filename.replace(/[^\w\s.-]/g, '_');
-        const outputPath = path.join('uploads', `processed_${timestamp}_${safeFilename}`);
+        // Save the processed file
+        const outputPath = path.join('uploads', processedFilename);
         fs.writeFileSync(outputPath, outputBuffer);
 
         console.log(`Generated Excel file: ${outputPath}`);
@@ -615,23 +618,8 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return res.status(404).json({ message: "File not found or not ready" });
       }
 
-      // Find the processed file in uploads directory
-      const uploadsDir = 'uploads';
-      const files = fs.readdirSync(uploadsDir);
-      
-      const processedFile = files
-        .filter(f => f.includes('processed_'))
-        .sort((a, b) => {
-          const timestampA = parseInt(a.split('_')[1]) || 0;
-          const timestampB = parseInt(b.split('_')[1]) || 0;
-          return timestampB - timestampA; // Latest first
-        })[0];
-
-      if (!processedFile) {
-        return res.status(404).json({ message: "Processed file not found" });
-      }
-
-      const filePath = path.join(uploadsDir, processedFile);
+      // Use the stored filename directly
+      const filePath = path.join('uploads', file.processedFilename);
 
       if (!fs.existsSync(filePath)) {
         return res.status(404).json({ message: "File does not exist" });
@@ -641,7 +629,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Length', fileBuffer.length.toString());
-      res.setHeader('Content-Disposition', 'attachment; filename="warehouse_summary.xlsx"');
+      res.setHeader('Content-Disposition', `attachment; filename="${file.processedFilename}"`);
 
       res.send(fileBuffer);
 
