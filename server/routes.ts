@@ -322,11 +322,43 @@ async function generateOutputExcel(processedData: ProcessedData): Promise<Buffer
     { width: 13 }, // AC
   ];
 
+  // Rows 3-11: Summary data rows
+  let currentRow = 3;
+  let warehouseSubTotal = 0;
+  
+  processedData.warehouseSummary.forEach((item) => {
+    const row = worksheet.getRow(currentRow);
+    row.values = [item.warehouse, item.ctn, item.skid || ''];
+    
+    // Apply borders to all cells in the summary table (A through AC)
+    for (let col = 1; col <= 29; col++) {
+      const cell = row.getCell(col);
+      cell.border = {
+        top: { style: 'thin' },
+        left: { style: 'thin' },
+        bottom: { style: 'thin' },
+        right: { style: 'thin' }
+      };
+    }
+    
+    warehouseSubTotal += item.ctn;
+    currentRow++;
+  });
+
+  // Calculate reference details subtotal
+  let referenceDetailsSubTotal = 0;
+  processedData.referenceDetails.forEach((ref) => {
+    referenceDetailsSubTotal += ref.ctn;
+  });
+
+  // Calculate the total as sum of both subtotals
+  const grandTotal = warehouseSubTotal + referenceDetailsSubTotal;
+
   // Row 1: Total + Date header
   worksheet.getCell('A1').value = 'Total';
   worksheet.getCell('A1').font = { bold: true };
   
-  worksheet.getCell('B1').value = processedData.total;
+  worksheet.getCell('B1').value = grandTotal;
   worksheet.getCell('B1').font = { bold: true };
   
   worksheet.getCell('C1').value = 'Date:';
@@ -364,29 +396,6 @@ async function generateOutputExcel(processedData: ProcessedData): Promise<Buffer
     };
     cell.alignment = { horizontal: 'center', vertical: 'middle' };
   }
-
-  // Rows 3-11: Summary data rows
-  let currentRow = 3;
-  let warehouseSubTotal = 0;
-  
-  processedData.warehouseSummary.forEach((item) => {
-    const row = worksheet.getRow(currentRow);
-    row.values = [item.warehouse, item.ctn, item.skid || ''];
-    
-    // Apply borders to all cells in the summary table (A through AC)
-    for (let col = 1; col <= 29; col++) {
-      const cell = row.getCell(col);
-      cell.border = {
-        top: { style: 'thin' },
-        left: { style: 'thin' },
-        bottom: { style: 'thin' },
-        right: { style: 'thin' }
-      };
-    }
-    
-    warehouseSubTotal += item.ctn;
-    currentRow++;
-  });
 
   // Row 12: Subtotal row (or wherever we are after warehouse data)
   const subtotalRowNum = currentRow;
@@ -457,6 +466,26 @@ async function generateOutputExcel(processedData: ProcessedData): Promise<Buffer
       
       detailRowNum++;
     });
+  }
+
+  // Add SUB-TOTAL row for reference details section
+  const referenceSubtotalRowNum = detailRowNum;
+  const referenceSubtotalRow = worksheet.getRow(referenceSubtotalRowNum);
+  referenceSubtotalRow.values = ['SUB-TOTAL', '', '', referenceDetailsSubTotal];
+  
+  // Make cells bold
+  referenceSubtotalRow.getCell(1).font = { bold: true };
+  referenceSubtotalRow.getCell(4).font = { bold: true };
+  
+  // Apply borders to reference subtotal row
+  for (let col = 1; col <= 4; col++) {
+    const cell = referenceSubtotalRow.getCell(col);
+    cell.border = {
+      top: { style: 'thin' },
+      left: { style: 'thin' },
+      bottom: { style: 'thin' },
+      right: { style: 'thin' }
+    };
   }
 
   // Write to buffer
